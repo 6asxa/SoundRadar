@@ -1,18 +1,19 @@
 <Window x:Class="SoundRadar.DeviceSelectorWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="SoundRadar" Height="300" Width="400" WindowStartupLocation="CenterScreen">
+        Title="SoundRadar" Height="510" Width="850" WindowStartupLocation="CenterScreen">
     <Grid Background="#272727">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="47*"/>
-            <ColumnDefinition Width="33*"/>
+
+            <ColumnDefinition/>
+            <ColumnDefinition Width="0*"/>
         </Grid.ColumnDefinitions>
-        <Canvas x:Name="MainCanvas" Grid.ColumnSpan="2">
+        <Canvas x:Name="MainCanvas" HorizontalAlignment="Left" Width="830" Height="510" VerticalAlignment="Top">
             <!-- Добавленный Canvas -->
-            <StackPanel Margin="30">
-                <TextBlock Text="Микрофон:" Foreground="White" Margin="0,0,0,5"/>
+            <StackPanel Canvas.Left="500" Canvas.Top="165" HorizontalAlignment="Left" VerticalAlignment="Top">
+                <TextBlock HorizontalAlignment="Center" Text="Микрофон" Foreground="White" Margin="0,0,0,5"/>
                 <ComboBox x:Name="deviceComboBox" Height="30" Margin="0,0,0,15" Width="320"/>
-                <TextBlock Text="Каналы:" Foreground="White" Margin="0,0,0,5"/>
+                <TextBlock HorizontalAlignment="Center" Text="Каналы" Foreground="White" Margin="0,0,0,5"/>
                 <ComboBox x:Name="channelComboBox" Height="30" Margin="0,0,0,15">
                     <ComboBoxItem Content="2 (Стерео)" />
                     <ComboBoxItem Content="6 (5.1)" />

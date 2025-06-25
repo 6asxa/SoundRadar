@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Windows;
 using System.Windows.Forms;
 using GameOverlay.Windows;
+using System.Reflection;
 
 namespace SoundRadar
 {
@@ -23,10 +24,22 @@ namespace SoundRadar
         {
             notifyIcon = new NotifyIcon
             {
-                Icon = new Icon("soundradar.ico"),
                 Text = "SoundRadar",
                 Visible = true
             };
+
+            // Загружаем иконку из встроенного ресурса
+            var assembly = Assembly.GetExecutingAssembly();
+            using var iconStream = assembly.GetManifestResourceStream("SoundRadar.soundradar.ico");
+
+            if (iconStream != null)
+            {
+                notifyIcon.Icon = new Icon(iconStream);
+            }
+            else
+            {
+                System.Windows.Forms.MessageBox.Show("Иконка не найдена в ресурсах!", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
 
             var contextMenu = new ContextMenuStrip();
             contextMenu.Items.Add("Показать/Скрыть", null, (s, e) => ToggleOverlay());
