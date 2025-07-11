@@ -197,7 +197,7 @@
             </ComboBox>
 
             <!-- Кнопки -->
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                 <Button Content="{DynamicResource CancelButton}" Height="48" Width="140" 
                         FontFamily="Segoe UI" FontSize="16" FontWeight="Medium" 
                         Background="#4A4A4A" Foreground="#E0E0E0" BorderThickness="0" 
