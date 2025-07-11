@@ -16,8 +16,8 @@ namespace SoundRadar
         private int sampleRate = 44100;
         private int bufferSize = 1024;
         private float backgroundNoise = 0;
-        private float alpha = 0.1f;
-        private bool running = false;
+        private float alpha = 0.05f;
+        private volatile bool running = false;
         private Task processingTask;
         private Action<float[]> onVolumes;
         private string deviceName;
@@ -49,7 +49,7 @@ namespace SoundRadar
                     deviceName = device.FriendlyName;
                 }
 
-                capture = new WasapiCapture(device);
+                capture = new WasapiLoopbackCapture();
                 capture.WaveFormat = new WaveFormat(sampleRate, 16, channelCount);
                 capture.DataAvailable += Capture_DataAvailable;
                 capture.StartRecording();

@@ -13,6 +13,7 @@ namespace SoundRadar
         private readonly int _squareSize = 15;
         private readonly AudioProcessor _audioProcessor;
         private GameOverlay.Drawing.SolidBrush _redBrush;
+        private GameOverlay.Drawing.SolidBrush _translucentBlackBrush;
         private GameOverlay.Drawing.Graphics _graphics;
         private GameOverlay.Drawing.Font _font;
         private GameOverlay.Drawing.SolidBrush _fontBrush;
@@ -67,7 +68,6 @@ namespace SoundRadar
         private void OnSetupGraphics(object sender, SetupGraphicsEventArgs e)
         {
             Debug.WriteLine("Setting up graphics");
-
             _graphics = e.Graphics;
 
             if (_graphics == null)
@@ -79,29 +79,24 @@ namespace SoundRadar
             try
             {
                 _redBrush = _graphics.CreateSolidBrush(255, 0, 0);
-                _font = _graphics.CreateFont("Arial", 12);
-                _fontBrush = _graphics.CreateSolidBrush(255, 255, 255);
-                _graphicsInitialized = true;
+                _translucentBlackBrush = _graphics.CreateSolidBrush(0, 0, 0, 120);
+                _graphicsInitialized = _redBrush != null && _translucentBlackBrush != null;
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"Error initializing graphics: {ex.Message}");
+                _graphicsInitialized = false;
             }
         }
 
         private void OnDestroyGraphics(object sender, DestroyGraphicsEventArgs e)
         {
             Debug.WriteLine("Destroying graphics");
-
             _graphicsInitialized = false;
-
             _redBrush?.Dispose();
-            _font?.Dispose();
-            _fontBrush?.Dispose();
-
+            _translucentBlackBrush?.Dispose();
             _redBrush = null;
-            _font = null;
-            _fontBrush = null;
+            _translucentBlackBrush = null;
         }
 
         private void UpdateSquarePosition(int x, int y)
@@ -118,21 +113,30 @@ namespace SoundRadar
 
         private void OnVolumes(float[] volumes)
         {
-            if (!_graphicsInitialized) return;
+            if (!_graphicsInitialized || volumes == null || volumes.Length < 2)
+            {
+                Debug.WriteLine("Invalid or insufficient audio data");
+                return;
+            }
 
-            int centerX = this.Width / 2;
-            int centerY = this.Height / 2;
+            int centerX = Width / 2;
+            int centerY = Height / 2;
 
             if (volumes.Length >= 2)
             {
-                float left = volumes[0];
-                float right = volumes[1];
-                float sum = left + right;
-                double balance = sum > 0 ? (right - left) / sum : 0;
+                float sum = volumes.Sum();
+                double balanceX = sum > 0.0001f ? (volumes[1] - volumes[0]) / sum : 0; // Левый-правый баланс
+                centerX = (int)(Width / 2 + (balanceX * (Width / 2 - _squareSize)));
+                centerX = Math.Clamp(centerX, _squareSize / 2, Width - _squareSize / 2);
 
-                centerX = (int)(this.Width / 2 + (balance * (this.Width / 2 - _squareSize)));
+                if (volumes.Length >= 4) // Например, для 5.1 или 7.1
+                {
+                    double balanceY = sum > 0.0001f ? (volumes[2] - volumes[3]) / sum : 0; // Фронт-тыл
+                    centerY = (int)(Height / 2 + (balanceY * (Height / 2 - _squareSize)));
+                    centerY = Math.Clamp(centerY, _squareSize / 2, Height - _squareSize / 2);
+                }
 
-                Debug.WriteLine($"Audio volumes - L: {left}, R: {right}, Balance: {balance}, New X: {centerX}");
+                Debug.WriteLine($"Audio volumes: {string.Join(", ", volumes)}, BalanceX: {balanceX}, New X: {centerX}, New Y: {centerY}");
             }
 
             UpdateSquarePosition(centerX, centerY);
@@ -140,20 +144,14 @@ namespace SoundRadar
 
         private void OnDrawGraphics(object sender, DrawGraphicsEventArgs e)
         {
-            if (!_graphicsInitialized || _redBrush == null || _font == null || _fontBrush == null)
+            if (!_graphicsInitialized || _redBrush == null || _translucentBlackBrush == null)
                 return;
 
             try
             {
                 var gfx = e.Graphics;
-
                 gfx.ClearScene();
-
-                using (var translucentBlackBrush = gfx.CreateSolidBrush(0, 0, 0, 120))
-                {
-                    gfx.FillRectangle(translucentBlackBrush, 0, 0, this.Width, this.Height);
-                }
-
+                gfx.FillRectangle(_translucentBlackBrush, 0, 0, Width, Height);
                 gfx.FillRectangle(_redBrush, _squareRect);
             }
             catch (Exception ex)
@@ -172,6 +170,11 @@ namespace SoundRadar
 
             _audioProcessor?.Dispose();
             _hotkeyReceiver?.Dispose();
+
+            _redBrush?.Dispose();
+            _translucentBlackBrush?.Dispose();
+            _font?.Dispose();
+            _fontBrush?.Dispose();
 
             base.Dispose();
         }
