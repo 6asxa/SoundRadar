@@ -6,8 +6,6 @@ using System.Text.Json;
 using System.IO;
 using System.Diagnostics;
 using System.Linq;
-using System.Windows.Shapes; // Убедитесь, что это пространство имен есть
-using System.Windows.Media;
 
 namespace SoundRadar
 {
@@ -15,43 +13,81 @@ namespace SoundRadar
     {
         public string SelectedDevice { get; private set; }
         public int SelectedChannels { get; private set; }
-        private System.Windows.Shapes.Rectangle square; // Явное указание типа
-        private const int squareSize = 40;
 
         public DeviceSelectorWindow()
         {
             InitializeComponent();
             LoadDevices();
             ApplySettings();
-
+            channelComboBox.SelectedIndex = 0; // По умолчанию стерео
         }
 
         private void LoadDevices()
         {
-            var enumerator = new MMDeviceEnumerator();
-            var devices = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active);
-
-            if (!devices.Any())
+            try
             {
-                System.Windows.MessageBox.Show("Нет доступных аудиоустройств!", "Ошибка",
-                              MessageBoxButton.OK, MessageBoxImage.Error);
-                return;
-            }
+                var enumerator = new MMDeviceEnumerator();
+                var devices = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active);
 
-            deviceComboBox.ItemsSource = devices.Select(d => d.FriendlyName).ToList();
-            deviceComboBox.SelectedIndex = 0;
+                if (!devices.Any())
+                {
+                    System.Windows.MessageBox.Show((string)FindResource("NoDevicesError"), "Error",
+                        MessageBoxButton.OK, MessageBoxImage.Error);
+                    DialogResult = false;
+                    Close();
+                    return;
+                }
+
+                var deviceNames = devices.Select(d => d.FriendlyName).ToList();
+                deviceComboBox.ItemsSource = deviceNames;
+                deviceComboBox.SelectedIndex = deviceNames.Any() ? 0 : -1;
+                Trace.WriteLine($"{DateTime.Now}: Loaded {deviceNames.Count} audio devices");
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"{DateTime.Now}: Error loading devices: {ex.Message}");
+                System.Windows.MessageBox.Show($"Failed to load audio devices: {ex.Message}", "Error",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+                DialogResult = false;
+                Close();
+            }
+        }
+
+        private void DeviceComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (deviceComboBox.SelectedItem != null)
+            {
+                SelectedDevice = deviceComboBox.SelectedItem.ToString();
+                Trace.WriteLine($"{DateTime.Now}: Selected device: {SelectedDevice}");
+            }
+        }
+
+        private void ChannelComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (channelComboBox.SelectedItem != null)
+            {
+                var selectedItem = (channelComboBox.SelectedItem as ComboBoxItem)?.Content.ToString();
+                SelectedChannels = selectedItem switch
+                {
+                    "2 (Stereo)" => 2,
+                    "6 (5.1)" => 6,
+                    "8 (7.1)" => 8,
+                    _ => 2
+                };
+                Trace.WriteLine($"{DateTime.Now}: Selected channels: {SelectedChannels}");
+            }
         }
 
         private void ApplyButton_Click(object sender, RoutedEventArgs e)
         {
             if (deviceComboBox.SelectedItem == null)
             {
-                System.Windows.MessageBox.Show("Пожалуйста, выберите устройство", "Ошибка",
-                              MessageBoxButton.OK, MessageBoxImage.Warning);
+                System.Windows.MessageBox.Show((string)FindResource("SelectDeviceError"), "Error",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
-            SelectedDevice = deviceComboBox.SelectedItem as string;
+            SelectedDevice = deviceComboBox.SelectedItem.ToString();
             SelectedChannels = channelComboBox.SelectedIndex switch
             {
                 0 => 2,
@@ -60,10 +96,36 @@ namespace SoundRadar
                 _ => 2
             };
 
-            // Сохраняем настройки
-            SaveSettings(SelectedDevice, SelectedChannels);
+            // Проверка поддержки каналов
+            try
+            {
+                var enumerator = new MMDeviceEnumerator();
+                var device = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active)
+                    .FirstOrDefault(d => d.FriendlyName == SelectedDevice);
+                if (device != null && device.AudioClient.MixFormat.Channels < SelectedChannels)
+                {
+                    System.Windows.MessageBox.Show(string.Format((string)FindResource("ChannelError"),
+                        device.AudioClient.MixFormat.Channels, SelectedChannels),
+                        "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"{DateTime.Now}: Error validating channels: {ex.Message}");
+                System.Windows.MessageBox.Show($"Failed to validate device channels: {ex.Message}", "Error",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
 
+            SaveSettings(SelectedDevice, SelectedChannels);
             DialogResult = true;
+            Close();
+        }
+
+        private void CancelButton_Click(object sender, RoutedEventArgs e)
+        {
+            DialogResult = false;
             Close();
         }
 
@@ -71,8 +133,18 @@ namespace SoundRadar
 
         private void SaveSettings(string deviceName, int channels)
         {
-            var settings = new AppSettings { DeviceName = deviceName, Channels = channels };
-            File.WriteAllText(SettingsFile, JsonSerializer.Serialize(settings));
+            try
+            {
+                var settings = new AppSettings { DeviceName = deviceName, Channels = channels };
+                File.WriteAllText(SettingsFile, JsonSerializer.Serialize(settings));
+                Trace.WriteLine($"{DateTime.Now}: Settings saved: Device={deviceName}, Channels={channels}");
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"{DateTime.Now}: Error saving settings: {ex.Message}");
+                System.Windows.MessageBox.Show($"Failed to save settings: {ex.Message}", "Error",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
 
         private AppSettings? LoadSettings()
@@ -80,11 +152,13 @@ namespace SoundRadar
             try
             {
                 if (!File.Exists(SettingsFile)) return null;
-                return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsFile));
+                var settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsFile));
+                Trace.WriteLine($"{DateTime.Now}: Settings loaded: Device={settings?.DeviceName}, Channels={settings?.Channels}");
+                return settings;
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"{DateTime.Now}: Ошибка загрузки настроек: {ex.Message}");
+                Trace.WriteLine($"{DateTime.Now}: Error loading settings: {ex.Message}");
                 return null;
             }
         }
@@ -92,17 +166,19 @@ namespace SoundRadar
         private void ApplySettings()
         {
             var settings = LoadSettings();
-            if (settings != null)
+            if (settings != null && deviceComboBox.Items.Contains(settings.DeviceName))
             {
                 deviceComboBox.SelectedItem = settings.DeviceName;
                 channelComboBox.SelectedIndex = settings.Channels switch { 2 => 0, 6 => 1, 8 => 2, _ => 0 };
+                SelectedDevice = settings.DeviceName;
+                SelectedChannels = settings.Channels;
             }
         }
 
-    public class AppSettings
-    {
-        public string? DeviceName { get; set; }
-        public int Channels { get; set; }
-    }
+        public class AppSettings
+        {
+            public string? DeviceName { get; set; }
+            public int Channels { get; set; }
+        }
     }
 }

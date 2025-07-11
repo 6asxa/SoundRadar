@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Diagnostics;
 
+
 namespace SoundRadar
 {
     public partial class AudioProcessor : IDisposable
