@@ -1,6 +1,8 @@
 ﻿using System;
+using System.Linq;
 using System.Windows;
 using System.Windows.Forms;
+using NAudio.CoreAudioApi;
 
 namespace SoundRadar
 {
@@ -17,14 +19,12 @@ namespace SoundRadar
                 ShutdownMode = ShutdownMode.OnExplicitShutdown
             };
 
-            string selectedDevice = null;
-            int selectedChannels = 2;
+            string selectedDeviceName = null;
 
             var selector = new DeviceSelectorWindow();
             if (selector.ShowDialog() == true)
             {
-                selectedDevice = selector.SelectedDevice;
-                selectedChannels = selector.SelectedChannels;
+                selectedDeviceName = selector.SelectedDevice;
             }
             else
             {
@@ -37,16 +37,28 @@ namespace SoundRadar
 
             try
             {
-                overlay = new GameOverlayWindow(selectedDevice, selectedChannels);
+                // === Получаем MMDevice ===
+                var enumerator = new MMDeviceEnumerator();
+
+                var device = enumerator
+                    .EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)
+                    .FirstOrDefault(d => d.FriendlyName == selectedDeviceName)
+                    ?? enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Console);
+
+                if (device == null)
+                    throw new Exception("Audio device not found.");
+
+                // === Создаём overlay ===
+                overlay = new GameOverlayWindow(device);
                 overlay.Create();
 
                 trayManager = new TrayIconManager(overlay, wpfApp);
 
                 System.Windows.Forms.Application.Run();
+
             }
             finally
             {
-                // Очищаем ресурсы при выходе
                 trayManager?.Dispose();
                 overlay?.Dispose();
                 wpfApp.Shutdown();

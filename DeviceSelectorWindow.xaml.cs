@@ -27,7 +27,8 @@ namespace SoundRadar
             try
             {
                 var enumerator = new MMDeviceEnumerator();
-                var devices = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active);
+                // <-- меняем Capture на Render
+                var devices = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
 
                 if (!devices.Any())
                 {
@@ -52,6 +53,7 @@ namespace SoundRadar
                 Close();
             }
         }
+
 
         private void DeviceComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
@@ -100,8 +102,9 @@ namespace SoundRadar
             try
             {
                 var enumerator = new MMDeviceEnumerator();
-                var device = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active)
+                var device = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)
                     .FirstOrDefault(d => d.FriendlyName == SelectedDevice);
+
                 if (device != null && device.AudioClient.MixFormat.Channels < SelectedChannels)
                 {
                     System.Windows.MessageBox.Show(string.Format((string)FindResource("ChannelError"),

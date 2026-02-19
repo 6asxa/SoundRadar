@@ -1,185 +1,204 @@
-using GameOverlay.Drawing;
 using GameOverlay.Windows;
+using NAudio.CoreAudioApi;
 using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using OverlayRectangle = GameOverlay.Drawing.Rectangle;
+using OverlayBrush = GameOverlay.Drawing.SolidBrush;
+using OverlayGraphics = GameOverlay.Drawing.Graphics;
+
 
 namespace SoundRadar
 {
     public class GameOverlayWindow : StickyWindow
     {
-        private GameOverlay.Drawing.Rectangle _squareRect;
+        private OverlayRectangle _squareRect;
         private readonly int _squareSize = 15;
-        private readonly AudioProcessor _audioProcessor;
-        private GameOverlay.Drawing.SolidBrush _redBrush;
-        private GameOverlay.Drawing.SolidBrush _translucentBlackBrush;
-        private GameOverlay.Drawing.Graphics _graphics;
-        private GameOverlay.Drawing.Font _font;
-        private GameOverlay.Drawing.SolidBrush _fontBrush;
+
+        private AudioProcessor _audioProcessor;
+        private OverlayBrush _redBrush;
+        private OverlayBrush _translucentBlackBrush;
+        private OverlayGraphics _graphics;
         private bool _graphicsInitialized;
 
         private GlobalHotkeyReceiver _hotkeyReceiver;
 
-        public GameOverlayWindow(string deviceName, int channelCount)
+        // === Движение ===
+        private float _currentAngle;
+        private float _currentIntensity;
+
+        private float _smoothX;
+        private float _smoothY;
+
+        private const float MovementSmoothing = 0.2f;
+        private const float ReturnToCenterSpeed = 0.05f;
+
+        public GameOverlayWindow(MMDevice selectedDevice)
             : base()
         {
-            // Настройки окна
-            this.Width = 125;
-            this.Height = 125;
-            var screenWidth = System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width;
-            var screenHeight = System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height;
-            this.X = (screenWidth - this.Width) / 2;
-            this.Y = (screenHeight - this.Height) / 2 + 300;
-            this.IsTopmost = true;
-            this.IsVisible = true;
-            this.FPS = 60;
+            Width = 125;
+            Height = 125;
 
-            this.SetupGraphics += OnSetupGraphics;
-            this.DestroyGraphics += OnDestroyGraphics;
-            this.DrawGraphics += OnDrawGraphics;
+            var screenWidth = Screen.PrimaryScreen.Bounds.Width;
+            var screenHeight = Screen.PrimaryScreen.Bounds.Height;
 
-            UpdateSquarePosition(this.Width / 2, this.Height / 2);
+            X = (screenWidth - Width) / 2;
+            Y = (screenHeight - Height) / 2 + 300;
 
-            _audioProcessor = new AudioProcessor(deviceName, channelCount, OnVolumes);
+            IsTopmost = true;
+            IsVisible = true;
+            FPS = 60;
+
+            SetupGraphics += OnSetupGraphics;
+            DestroyGraphics += OnDestroyGraphics;
+            DrawGraphics += OnDrawGraphics;
+
+            // Центр по умолчанию
+            _smoothX = Width / 2f;
+            _smoothY = Height / 2f;
+
+            UpdateSquarePosition((int)_smoothX, (int)_smoothY);
+
+            // Новый AudioProcessor (angle + intensity)
+            _audioProcessor = new AudioProcessor(selectedDevice, OnDirection);
             _audioProcessor.Start();
 
-            Debug.WriteLine("GameOverlayWindow initialized");
+            // Глобальный хоткей Ctrl+T
+            _hotkeyReceiver = new GlobalHotkeyReceiver(0x0002, 0x54, BringWindowToFront);
 
-            // Регистрируем глобальный хоткей Ctrl+T
-            _hotkeyReceiver = new GlobalHotkeyReceiver(0x0002, 0x54, () =>
-            {
-                Debug.WriteLine("Горячая клавиша Ctrl+T нажата");
-                BringWindowToFront();
-            });
+            Debug.WriteLine("GameOverlayWindow initialized");
         }
 
         private void BringWindowToFront()
         {
-            if (!this.IsVisible)
-                this.Show();
+            if (!IsVisible)
+                Show();
 
-            this.IsTopmost = false;
-            this.IsTopmost = true;
+            IsTopmost = false;
+            IsTopmost = true;
 
-            Debug.WriteLine("Окно поставлено поверх экрана");
+            Debug.WriteLine("Overlay moved to front");
         }
+
+        // ================= AUDIO CALLBACK =================
+
+        private void OnDirection(float angleDeg, float intensity)
+        {
+            _currentAngle = angleDeg;
+            _currentIntensity = Math.Clamp(intensity, 0f, 1f);
+        }
+
+        // ================= GRAPHICS =================
 
         private void OnSetupGraphics(object sender, SetupGraphicsEventArgs e)
         {
-            Debug.WriteLine("Setting up graphics");
             _graphics = e.Graphics;
 
             if (_graphics == null)
-            {
-                Debug.WriteLine("Graphics is null");
                 return;
-            }
 
-            try
-            {
-                _redBrush = _graphics.CreateSolidBrush(255, 0, 0);
-                _translucentBlackBrush = _graphics.CreateSolidBrush(0, 0, 0, 120);
-                _graphicsInitialized = _redBrush != null && _translucentBlackBrush != null;
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error initializing graphics: {ex.Message}");
-                _graphicsInitialized = false;
-            }
+            _redBrush = _graphics.CreateSolidBrush(255, 0, 0);
+            _translucentBlackBrush = _graphics.CreateSolidBrush(0, 0, 0, 120);
+
+            _graphicsInitialized = true;
         }
 
         private void OnDestroyGraphics(object sender, DestroyGraphicsEventArgs e)
         {
-            Debug.WriteLine("Destroying graphics");
             _graphicsInitialized = false;
+
             _redBrush?.Dispose();
             _translucentBlackBrush?.Dispose();
+
             _redBrush = null;
             _translucentBlackBrush = null;
         }
 
+        private void OnDrawGraphics(object sender, DrawGraphicsEventArgs e)
+        {
+            if (!_graphicsInitialized)
+                return;
+
+            var gfx = e.Graphics;
+
+            try
+            {
+                gfx.ClearScene();
+                gfx.FillRectangle(_translucentBlackBrush, 0, 0, Width, Height);
+
+                UpdateSquareMovement();
+
+                gfx.FillRectangle(_redBrush, _squareRect);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Draw error: {ex.Message}");
+            }
+        }
+
+        // ================= ДВИЖЕНИЕ =================
+
+        private void UpdateSquareMovement()
+        {
+            float centerX = Width / 2f;
+            float centerY = Height / 2f;
+
+            float maxRadius = (Width / 2f) - _squareSize;
+
+            if (_currentIntensity > 0.01f)
+            {
+                float radius = maxRadius * _currentIntensity;
+                float angleRad = _currentAngle * (float)Math.PI / 180f;
+
+                float targetX = centerX + MathF.Sin(angleRad) * radius;
+                float targetY = centerY - MathF.Cos(angleRad) * radius;
+
+                _smoothX += (targetX - _smoothX) * MovementSmoothing;
+                _smoothY += (targetY - _smoothY) * MovementSmoothing;
+            }
+            else
+            {
+                // Возврат в центр при тишине
+                _smoothX += (centerX - _smoothX) * ReturnToCenterSpeed;
+                _smoothY += (centerY - _smoothY) * ReturnToCenterSpeed;
+            }
+
+            int finalX = (int)Math.Clamp(_smoothX, _squareSize / 2, Width - _squareSize / 2);
+            int finalY = (int)Math.Clamp(_smoothY, _squareSize / 2, Height - _squareSize / 2);
+
+            UpdateSquarePosition(finalX, finalY);
+        }
+
         private void UpdateSquarePosition(int x, int y)
         {
-            _squareRect = new GameOverlay.Drawing.Rectangle(
+            _squareRect = new OverlayRectangle(
                 x - _squareSize / 2,
                 y - _squareSize / 2,
                 x + _squareSize / 2,
                 y + _squareSize / 2
             );
-
-            Debug.WriteLine($"Square position updated to X: {x}, Y: {y}");
         }
 
-        private void OnVolumes(float[] volumes)
-        {
-            if (!_graphicsInitialized || volumes == null || volumes.Length < 2)
-            {
-                Debug.WriteLine("Invalid or insufficient audio data");
-                return;
-            }
-
-            int centerX = Width / 2;
-            int centerY = Height / 2;
-
-            if (volumes.Length >= 2)
-            {
-                float sum = volumes.Sum();
-                double balanceX = sum > 0.0001f ? (volumes[1] - volumes[0]) / sum : 0; // Левый-правый баланс
-                centerX = (int)(Width / 2 + (balanceX * (Width / 2 - _squareSize)));
-                centerX = Math.Clamp(centerX, _squareSize / 2, Width - _squareSize / 2);
-
-                if (volumes.Length >= 4) // Например, для 5.1 или 7.1
-                {
-                    double balanceY = sum > 0.0001f ? (volumes[2] - volumes[3]) / sum : 0; // Фронт-тыл
-                    centerY = (int)(Height / 2 + (balanceY * (Height / 2 - _squareSize)));
-                    centerY = Math.Clamp(centerY, _squareSize / 2, Height - _squareSize / 2);
-                }
-
-                Debug.WriteLine($"Audio volumes: {string.Join(", ", volumes)}, BalanceX: {balanceX}, New X: {centerX}, New Y: {centerY}");
-            }
-
-            UpdateSquarePosition(centerX, centerY);
-        }
-
-        private void OnDrawGraphics(object sender, DrawGraphicsEventArgs e)
-        {
-            if (!_graphicsInitialized || _redBrush == null || _translucentBlackBrush == null)
-                return;
-
-            try
-            {
-                var gfx = e.Graphics;
-                gfx.ClearScene();
-                gfx.FillRectangle(_translucentBlackBrush, 0, 0, Width, Height);
-                gfx.FillRectangle(_redBrush, _squareRect);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"DrawGraphics error: {ex.Message}");
-            }
-        }
+        // ================= DISPOSE =================
 
         public new void Dispose()
         {
-            Debug.WriteLine("Disposing GameOverlayWindow");
-
-            this.SetupGraphics -= OnSetupGraphics;
-            this.DestroyGraphics -= OnDestroyGraphics;
-            this.DrawGraphics -= OnDrawGraphics;
+            SetupGraphics -= OnSetupGraphics;
+            DestroyGraphics -= OnDestroyGraphics;
+            DrawGraphics -= OnDrawGraphics;
 
             _audioProcessor?.Dispose();
             _hotkeyReceiver?.Dispose();
 
             _redBrush?.Dispose();
             _translucentBlackBrush?.Dispose();
-            _font?.Dispose();
-            _fontBrush?.Dispose();
 
             base.Dispose();
         }
 
-        // Встроенный класс для регистрации хоткея без зависимостей от WPF/WinForms
+        // ================= HOTKEY =================
+
         private class GlobalHotkeyReceiver : NativeWindow, IDisposable
         {
             private const int WM_HOTKEY = 0x0312;
@@ -190,6 +209,7 @@ namespace SoundRadar
 
             [DllImport("user32.dll")]
             private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
             [DllImport("user32.dll")]
             private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
@@ -198,10 +218,10 @@ namespace SoundRadar
                 this.modifiers = modifiers;
                 this.key = key;
                 this.onHotkey = onHotkey;
-                this.hotkeyId = GetHashCode();
+                hotkeyId = GetHashCode();
 
                 CreateHandle(new CreateParams());
-                RegisterHotKey(this.Handle, hotkeyId, modifiers, key);
+                RegisterHotKey(Handle, hotkeyId, modifiers, key);
             }
 
             protected override void WndProc(ref Message m)
@@ -216,7 +236,7 @@ namespace SoundRadar
 
             public void Dispose()
             {
-                UnregisterHotKey(this.Handle, hotkeyId);
+                UnregisterHotKey(Handle, hotkeyId);
                 DestroyHandle();
             }
         }

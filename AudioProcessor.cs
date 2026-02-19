@@ -1,111 +1,133 @@
-using NAudio.CoreAudioApi;
+п»їusing NAudio.CoreAudioApi;
 using NAudio.Wave;
 using System;
 using System.Linq;
 using System.Numerics;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Diagnostics;
-
 
 namespace SoundRadar
 {
-    public partial class AudioProcessor : IDisposable
+    public class AudioProcessor : IDisposable
     {
-        private WasapiCapture capture;
+        private readonly WasapiLoopbackCapture capture;
+        private readonly Action<float, float> onDirection;
+        // float angleDegrees, float intensity
+
         private int channelCount;
-        private int sampleRate = 44100;
-        private int bufferSize = 1024;
-        private float backgroundNoise = 0;
-        private float alpha = 0.05f;
-        private volatile bool running = false;
-        private Task processingTask;
-        private Action<float[]> onVolumes;
-        private string deviceName;
+        private float[] smoothedLevels;
+        private float noiseFloor = 0f;
 
-        public AudioProcessor(string deviceName, int channels, Action<float[]> onVolumes)
+        private const float SmoothingFactor = 0.25f;
+        private const float NoiseAdaptSpeed = 0.01f;
+        private const float NoiseGateMultiplier = 1.5f;
+
+        public AudioProcessor(MMDevice device, Action<float, float> onDirection)
         {
-            this.deviceName = deviceName;
-            this.channelCount = channels;
-            this.onVolumes = onVolumes;
+            this.onDirection = onDirection;
+
+            capture = new WasapiLoopbackCapture(device);
+            channelCount = capture.WaveFormat.Channels;
+            smoothedLevels = new float[channelCount];
+
+            capture.DataAvailable += OnDataAvailable;
         }
 
-        public void Start()
-        {
-            try
-            {
-                var enumerator = new MMDeviceEnumerator();
-                var devices = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active);
+        public void Start() => capture.StartRecording();
 
-                var device = devices.FirstOrDefault(d => d.FriendlyName == deviceName);
-                if (device == null)
+        public void Stop() => capture.StopRecording();
+
+        private void OnDataAvailable(object sender, WaveInEventArgs e)
+        {
+            int floatCount = e.BytesRecorded / 4;
+            int samplesPerChannel = floatCount / channelCount;
+
+            float[] rms = new float[channelCount];
+
+            // === RMS СЂР°СЃС‡РµС‚ ===
+            for (int i = 0; i < floatCount; i += channelCount)
+            {
+                for (int ch = 0; ch < channelCount; ch++)
                 {
-                    // Попробуем найти устройство по умолчанию, если указанное не найдено
-                    device = enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Console);
-
-                    if (device == null)
-                        throw new Exception("Не найдено ни указанное устройство, ни устройство по умолчанию");
-
-                    // Обновим имя устройства на найденное по умолчанию
-                    deviceName = device.FriendlyName;
+                    float sample = BitConverter.ToSingle(e.Buffer, (i + ch) * 4);
+                    rms[ch] += sample * sample;
                 }
-
-                capture = new WasapiLoopbackCapture();
-                capture.WaveFormat = new WaveFormat(sampleRate, 16, channelCount);
-                capture.DataAvailable += Capture_DataAvailable;
-                capture.StartRecording();
-                running = true;
             }
-            catch (Exception ex)
-            {
-                // Логирование ошибки
-                Trace.WriteLine($"[{DateTime.Now}] AudioProcessor.Start error: {ex}");
-                throw; // Перебросить исключение дальше или обработать
-            }
-        }
 
-        private void Capture_DataAvailable(object sender, WaveInEventArgs e)
-        {
-            // Преобразуем байты в short
-            int samples = e.BytesRecorded / 2;
-            short[] buffer = new short[samples];
-            Buffer.BlockCopy(e.Buffer, 0, buffer, 0, e.BytesRecorded);
+            for (int ch = 0; ch < channelCount; ch++)
+                rms[ch] = (float)Math.Sqrt(rms[ch] / samplesPerChannel);
 
-            // Разделяем по каналам
-            float[] volumes = new float[channelCount];
+            // === РђРґР°РїС‚РёРІРЅС‹Р№ С€СѓРј ===
+            float mean = rms.Average();
+            noiseFloor = NoiseAdaptSpeed * mean + (1 - NoiseAdaptSpeed) * noiseFloor;
+            float threshold = noiseFloor * NoiseGateMultiplier;
+
+            // === Noise gate + СЃРіР»Р°Р¶РёРІР°РЅРёРµ ===
             for (int ch = 0; ch < channelCount; ch++)
             {
-                float sum = 0;
-                int count = 0;
-                for (int i = ch; i < buffer.Length; i += channelCount)
-                {
-                    float sample = buffer[i] / 32768f;
-                    sum += sample * sample;
-                    count++;
-                }
-                volumes[ch] = (float)Math.Sqrt(sum / Math.Max(1, count));
+                float level = rms[ch] > threshold ? rms[ch] : 0f;
+
+                smoothedLevels[ch] =
+                    SmoothingFactor * level +
+                    (1 - SmoothingFactor) * smoothedLevels[ch];
             }
 
-            // Фоновый шум и порог
-            float mean = volumes.Average();
-            backgroundNoise = alpha * mean + (1 - alpha) * backgroundNoise;
-            float threshold = backgroundNoise * 1.5f;
+            // === Р’РµРєС‚РѕСЂ РЅР°РїСЂР°РІР»РµРЅРёСЏ ===
+            Vector2 direction = CalculateDirection(smoothedLevels);
 
-            // Только вызов делегата:
-            onVolumes?.Invoke(volumes.Select(v => v > threshold ? v : 0).ToArray());
-        }
+            float intensity = direction.Length();
 
-        public void Stop()
-        {
-            running = false;
-            if (capture != null)
+            if (intensity < 0.0001f)
             {
-                capture.StopRecording();
-                capture.Dispose();
-                capture = null;
+                onDirection?.Invoke(0f, 0f);
+                return;
+            }
+
+            direction = Vector2.Normalize(direction);
+
+            float angleRad = MathF.Atan2(direction.X, direction.Y);
+            float angleDeg = angleRad * (180f / MathF.PI);
+
+            if (angleDeg < 0)
+                angleDeg += 360f;
+
+            onDirection?.Invoke(angleDeg, intensity);
+        }
+
+        private Vector2 CalculateDirection(float[] levels)
+        {
+            Vector2 result = Vector2.Zero;
+
+            for (int ch = 0; ch < levels.Length; ch++)
+            {
+                Vector2 channelVector = GetChannelVector(ch);
+                result += channelVector * levels[ch];
+            }
+
+            return result;
+        }
+
+        private Vector2 GetChannelVector(int ch)
+        {
+            // РЈРЅРёРІРµСЂСЃР°Р»СЊРЅР°СЏ Р»РѕРіРёРєР° РїРѕ РёРЅРґРµРєСЃСѓ РєР°РЅР°Р»Р°
+            // Р Р°Р±РѕС‚Р°РµС‚ РґР»СЏ 2.0 / 5.1 / 7.1 СЃС‚Р°РЅРґР°СЂС‚РЅРѕРіРѕ РїРѕСЂСЏРґРєР°
+
+            switch (ch)
+            {
+                case 0: return new Vector2(-1, 1);  // FL
+                case 1: return new Vector2(1, 1);   // FR
+                case 2: return new Vector2(0, 1);   // FC
+                case 3: return Vector2.Zero;        // LFE РёРіРЅРѕСЂРёСЂСѓРµРј
+                case 4: return new Vector2(-1, 0);  // SL
+                case 5: return new Vector2(1, 0);   // SR
+                case 6: return new Vector2(-1, -1); // RL
+                case 7: return new Vector2(1, -1);  // RR
+                default: return Vector2.Zero;
             }
         }
 
-        public void Dispose() => Stop();
+        public void Dispose()
+        {
+            Stop();
+            capture?.Dispose();
+        }
     }
 }
